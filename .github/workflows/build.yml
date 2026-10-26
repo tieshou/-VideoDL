@@ -6,6 +6,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -30,3 +32,11 @@ jobs:
         with:
           name: VideoDL-${{ env.V }}
           path: VideoDL-*.apk
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.V }}
+          name: VideoDL ${{ env.V }}
+          body: 下载下面的 VideoDL-${{ env.V }}.apk，在手机上直接安装（可覆盖旧版本）。
+          files: VideoDL-*.apk
+          make_latest: true
