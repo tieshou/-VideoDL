@@ -1,0 +1,32 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Restore keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/videodl.keystore
+      - name: Build
+        env:
+          VIDEODL_KEYSTORE: ${{ runner.temp }}/videodl.keystore
+        run: gradle assembleRelease --no-daemon
+      - name: Rename
+        run: |
+          V=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          cp app/build/outputs/apk/release/app-release.apk VideoDL-$V.apk
+          echo "V=$V" >> $GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoDL-${{ env.V }}
+          path: VideoDL-*.apk
