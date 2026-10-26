@@ -27,7 +27,7 @@ enum class Quality(val label: String) {
 data class SavedItem(val name: String, val uri: Uri, val mime: String)
 
 /** 下载完成后请用户确认文件名；result 里返回不含扩展名的新名字 */
-class RenameAsk(val original: String, val ext: String, val result: CompletableDeferred<String>)
+class RenameAsk(val original: String, val ext: String, val title: String, val result: CompletableDeferred<String>)
 
 class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     val url = mutableStateOf("")
@@ -146,7 +146,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 val files = workDir.walkTopDown().filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }.toList()
                 if (files.isEmpty()) throw IllegalStateException("没有生成文件")
                 val finalFiles = mergeIfSplit(files, workDir)
-                val items = finalFiles.map { f -> saveToMediaStore(f, askName(f)) }
+                val items = finalFiles.mapIndexed { i, f -> saveToMediaStore(f, askName(f, i, finalFiles.size)) }
                 withContext(Dispatchers.Main) {
                     saved.addAll(0, items)
                     progress.value = 1f
@@ -217,8 +217,16 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     /** yt-dlp 没能合并时，自己用内置 ffmpeg 把视频轨和音频轨合成一个 mp4 */
     private suspend fun mergeIfSplit(files: List<File>, dir: File): List<File> {
-        val split = files.filter { fmtRegex.matches(it.name) }
-        if (split.size < 2) return files
+        // 一条推文可能有多个视频，每个视频各自是「视频轨 + 音频轨」，按文件名分组分别合并
+        val groups = files.filter { fmtRegex.matches(it.name) }
+            .groupBy { fmtRegex.find(it.name)!!.groupValues[1] }
+            .filter { it.value.size >= 2 }
+        var result = files
+        for ((_, split) in groups) result = mergePair(result, split, dir)
+        return result
+    }
+
+    private suspend fun mergePair(files: List<File>, split: List<File>, dir: File): List<File> {
         val audio = split.firstOrNull { it.extension.lowercase() in audioExts }
             ?: split.minByOrNull { it.length() }!!
         val video = split.filter { it != audio }.maxByOrNull { it.length() } ?: return files
@@ -315,9 +323,11 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     private val idSuffix = Regex("\\s*\\[[^\\]]+\\]$")
 
     /** 弹框让用户改名，默认是视频原标题 */
-    private suspend fun askName(f: File): String {
-        val original = f.nameWithoutExtension.replace(idSuffix, "").ifBlank { f.nameWithoutExtension }
-        val ask = RenameAsk(original, f.extension, CompletableDeferred())
+    private suspend fun askName(f: File, index: Int, total: Int): String {
+        val title = f.nameWithoutExtension.replace(idSuffix, "").ifBlank { f.nameWithoutExtension }
+        val original = if (total > 1) "$title (${index + 1})" else title
+        val label = if (total > 1) "保存为（第 ${index + 1} 个，共 $total 个）" else "保存为"
+        val ask = RenameAsk(original, f.extension, label, CompletableDeferred())
         withContext(Dispatchers.Main) {
             status.value = "下载完成，请确认文件名"
             renameAsk.value = ask

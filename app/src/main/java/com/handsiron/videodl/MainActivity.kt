@@ -175,7 +175,7 @@ fun RenameDialog(ask: RenameAsk) {
     var name by remember(ask) { mutableStateOf(ask.original) }
     AlertDialog(
         onDismissRequest = { },
-        title = { Text("保存为") },
+        title = { Text(ask.title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
