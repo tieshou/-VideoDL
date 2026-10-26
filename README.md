@@ -22,7 +22,7 @@
 
 没有网址白名单，只要 yt-dlp 支持的网站都可以试，比如 B 站、TikTok、微博、小红书、Vimeo、Reddit、Twitch 等。
 
-- Instagram、抖音、Facebook 等通常需要登录 Cookie，目前还不支持导入 Cookie
+- Instagram、抖音、Facebook 等需要登录的网站：先在 App 里点「登录网站」登录一次（1.5 起支持）
 - Netflix、爱奇艺、腾讯视频等有 DRM 保护或付费的内容不能下载
 
 ## 系统要求
@@ -55,6 +55,7 @@
 
 ## 版本记录
 
+- **1.5**：新增「登录网站」（Instagram、抖音、Facebook、X、B站，登录信息只存本机），可下载需登录的视频；下载完成后可修改文件名，默认是原标题
 - **1.4**：ffmpeg 合并失败时，改用 Android 系统 MediaMuxer 合并
 - **1.3**：显示版本号；新增自检按钮和 verbose 日志；保留中文文件名
 - **1.2**：用 ffmpeg 自己合并分开的音视频

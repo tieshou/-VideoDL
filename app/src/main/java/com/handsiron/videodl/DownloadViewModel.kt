@@ -14,6 +14,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,6 +26,9 @@ enum class Quality(val label: String) {
 
 data class SavedItem(val name: String, val uri: Uri, val mime: String)
 
+/** 下载完成后请用户确认文件名；result 里返回不含扩展名的新名字 */
+class RenameAsk(val original: String, val ext: String, val result: CompletableDeferred<String>)
+
 class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     val url = mutableStateOf("")
     val quality = mutableStateOf(Quality.BEST)
@@ -34,6 +38,8 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     val log = mutableStateOf("")
     val version = mutableStateOf("")
     val saved = mutableStateListOf<SavedItem>()
+    val renameAsk = mutableStateOf<RenameAsk?>(null)
+    val loggedSites = mutableStateListOf<LoginSite>()
 
     private val processId = "videodl-main"
     private var autoUpdateTried = false
@@ -42,10 +48,21 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         val err = App.initError
         status.value = if (err != null) "初始化失败：$err" else "粘贴链接，或在 YouTube / X 里点「分享」选本应用"
         refreshVersion()
+        refreshLogins()
         autoUpdateOncePerDay()
     }
 
     private fun ctx(): Context = getApplication()
+
+    fun refreshLogins() {
+        loggedSites.clear()
+        loggedSites.addAll(Cookies.loggedIn(ctx()))
+    }
+
+    fun logout(s: LoginSite) {
+        Cookies.clear(ctx(), s)
+        refreshLogins()
+    }
 
     private fun refreshVersion() {
         version.value = YoutubeDL.versionName(ctx()) ?: YoutubeDL.version(ctx()) ?: "未知"
@@ -129,7 +146,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 val files = workDir.walkTopDown().filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }.toList()
                 if (files.isEmpty()) throw IllegalStateException("没有生成文件")
                 val finalFiles = mergeIfSplit(files, workDir)
-                val items = finalFiles.map { saveToMediaStore(it) }
+                val items = finalFiles.map { f -> saveToMediaStore(f, askName(f)) }
                 withContext(Dispatchers.Main) {
                     saved.addAll(0, items)
                     progress.value = 1f
@@ -140,7 +157,10 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Throwable) {
                 val m = (e.message ?: e.toString()).lines().lastOrNull { it.contains("ERROR") } ?: (e.message ?: e.toString())
                 withContext(Dispatchers.Main) {
-                    status.value = "失败：" + m.take(300) + "\n（可以先点「更新引擎」再试）"
+                    val needLogin = listOf("login", "cookies", "sign in", "private", "Requested content is not available")
+                        .any { m.contains(it, true) }
+                    status.value = "失败：" + m.take(300) +
+                        if (needLogin) "\n（这个视频可能要登录才能下载，可以先点「登录网站」）" else "\n（可以先点「更新引擎」再试）"
                     log.value = (log.value + "\n" + (e.message ?: "")).takeLast(4000)
                 }
             } finally {
@@ -171,6 +191,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         r.addOption("--no-mtime")
         r.addOption("--no-playlist")
         r.addOption("--verbose")
+        Cookies.combined(ctx(), dir)?.let { r.addOption("--cookies", it.absolutePath) }
         when (q) {
             Quality.AUDIO -> {
                 r.addOption("-f", "ba[ext=m4a]/ba/b")
@@ -291,7 +312,25 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun saveToMediaStore(f: File): SavedItem {
+    private val idSuffix = Regex("\\s*\\[[^\\]]+\\]$")
+
+    /** 弹框让用户改名，默认是视频原标题 */
+    private suspend fun askName(f: File): String {
+        val original = f.nameWithoutExtension.replace(idSuffix, "").ifBlank { f.nameWithoutExtension }
+        val ask = RenameAsk(original, f.extension, CompletableDeferred())
+        withContext(Dispatchers.Main) {
+            status.value = "下载完成，请确认文件名"
+            renameAsk.value = ask
+        }
+        val name = ask.result.await().trim().ifBlank { original }
+        withContext(Dispatchers.Main) {
+            renameAsk.value = null
+            status.value = "正在保存到相册…"
+        }
+        return name
+    }
+
+    private fun saveToMediaStore(f: File, baseName: String): SavedItem {
         val ext = f.extension.lowercase()
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
             ?: if (ext in listOf("m4a", "mp3", "opus", "ogg", "aac")) "audio/$ext" else "video/$ext"
@@ -299,8 +338,9 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         val collection = if (isAudio) MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         else MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val rel = (if (isAudio) Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_MOVIES) + "/VideoDL"
+        val displayName = (baseName.replace(Regex("[\\\\/:*?\"<>|\\n\\r]"), "_").take(150) + "." + f.extension)
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, f.name.replace(Regex("[\\\\/:*?\"<>|\\n\\r]"), "_"))
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -311,7 +351,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         cr.update(uri, values, null, null)
-        return SavedItem(f.name, uri, mime)
+        return SavedItem(displayName, uri, mime)
     }
 
     companion object {

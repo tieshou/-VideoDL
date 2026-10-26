@@ -34,6 +34,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        vm.refreshLogins()
+    }
+
+    fun openLogin(site: LoginSite) {
+        startActivity(Intent(this, LoginActivity::class.java).putExtra("site", site.key))
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
@@ -73,7 +82,7 @@ fun Screen(vm: DownloadViewModel) {
             OutlinedTextField(
                 value = vm.url.value,
                 onValueChange = { vm.url.value = it },
-                label = { Text("YouTube / X 链接") },
+                label = { Text("视频链接") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 enabled = !busy
@@ -109,6 +118,30 @@ fun Screen(vm: DownloadViewModel) {
 
             Text(vm.status.value, style = MaterialTheme.typography.bodyMedium)
 
+            vm.renameAsk.value?.let { ask -> RenameDialog(ask) }
+
+            HorizontalDivider()
+            var showSites by remember { mutableStateOf(false) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (vm.loggedSites.isEmpty()) "未登录任何网站" else "已登录：" + vm.loggedSites.joinToString("、") { it.label },
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall
+                )
+                TextButton(enabled = !busy, onClick = { showSites = !showSites }) { Text(if (showSites) "收起" else "登录网站") }
+            }
+            if (showSites) {
+                Text("Instagram、抖音、Facebook 等要登录才能看的视频，先在这里登录一次。登录信息只存在本机。",
+                    style = MaterialTheme.typography.bodySmall)
+                Cookies.sites.forEach { site ->
+                    val on = vm.loggedSites.any { it.key == site.key }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(site.label + if (on) "（已登录）" else "", modifier = Modifier.weight(1f))
+                        TextButton(onClick = { act.openLogin(site) }) { Text(if (on) "重新登录" else "登录") }
+                        if (on) TextButton(onClick = { vm.logout(site) }) { Text("退出") }
+                    }
+                }
+            }
+
             if (vm.saved.isNotEmpty()) {
                 HorizontalDivider()
                 Text("已下载（保存在相册 Movies/VideoDL）", style = MaterialTheme.typography.labelLarge)
@@ -135,4 +168,27 @@ fun Screen(vm: DownloadViewModel) {
             }
         }
     }
+}
+
+@Composable
+fun RenameDialog(ask: RenameAsk) {
+    var name by remember(ask) { mutableStateOf(ask.original) }
+    AlertDialog(
+        onDismissRequest = { },
+        title = { Text("保存为") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    suffix = { Text("." + ask.ext) },
+                    trailingIcon = { if (name.isNotEmpty()) TextButton(onClick = { name = "" }) { Text("清空") } }
+                )
+                Text("默认是原标题，可以直接修改。", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { Button(onClick = { ask.result.complete(name) }) { Text("保存") } },
+        dismissButton = { TextButton(onClick = { ask.result.complete(ask.original) }) { Text("用原名") } },
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false)
+    )
 }
